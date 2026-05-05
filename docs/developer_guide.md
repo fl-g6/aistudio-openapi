@@ -1,7 +1,7 @@
-# AI Studio Public API - Developer Guide
+# Quickplay AI Studio Public API - Developer Guide
 
 **API Version:** 6.3
-**Base URL:** `https://example.com/genai-api`
+**Base URL:** `https://verticalizer.videoai.wbd.com/`
 
 ## Authentication
 
