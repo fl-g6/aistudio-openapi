@@ -1,7 +1,7 @@
 # Quickplay AI Studio Public API - Developer Guide
 
-**API Version:** 6.3
-**Base URL:** `https://verticalizer.videoai.wbd.com/`
+**API Version:** 6.3.1
+**Base URL:** `https://verticalizer.videoai.wbd.com/genai-api`
 
 ## Authentication
 
@@ -13,22 +13,49 @@ x-api-key: YOUR_API_KEY
 
 ## Endpoints
 
-### POST /v2/upload
+### POST /v3/upload
 
-Add or update a media asset with optional metadata. If an asset with the same `ext_id` already exists, it will be updated and the existing `media_id` will be returned.
+Add or update a media asset group with optional metadata. `master` and `proxy` are **objects** that each wrap a `media_assets` array, so a single request can register multiple master and proxy assets together (e.g. multi-track or multi-rendition deliveries). If a group with the same `ext_id` already exists, it is updated and the existing `media_id` is returned.
 
 #### Request Body
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `master` | MediaAsset | Yes | Primary media asset |
-| `proxy` | MediaAsset | No | Proxy (lower-resolution) media asset |
+| `master` | MediaAssetV3Group | Yes | Master asset group containing a `media_assets` array. |
+| `proxy` | MediaAssetV3Group | No | Proxy asset group containing a `media_assets` array. |
 | `priority` | integer | No | Processing priority, `0`-`1000` (default `0`). `0` is lowest, `1000` is highest. Jobs are processed based on this priority and request time -- earlier requests win within the same priority. |
 | `email` | string | No | Email address of the requesting user. |
-| `ai_flags` | string[] | No | AI processing flags. When provided, the request is processed **asynchronously** and returns HTTP 202 with a `job_id`. See AI flags and async response sections below. |
-| `metadata` | array | No | Localized metadata entries |
+| `ai_flags` | string[] | No | AI processing flags. See [AI flags](#ai-flags) below for allowed values and combination rules. When provided, the request is processed **asynchronously** and returns HTTP 202 with a `job_id`. |
+| `metadata` | array | No | Localized metadata entries. |
 
-##### AI flags
+**MediaAssetV3Group fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ext_id` | string | Yes | Identifier for this asset group in the external MAM / DAM system. |
+| `media_assets` | MediaAssetV3Item[] | Yes | One or more media assets in the group. At least one entry. |
+
+**MediaAssetV3Item fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `ext_asset_id` | string | Yes | Identifier for the asset within this upload group |
+| `uri` | string | Yes | Location of the asset. Supported schemes: `https`, `s3`, `gcs` |
+| `duration` | number | No | Duration of the media asset in seconds. |
+| `size` | integer | No | Size of the media asset in bytes. |
+| `media_profile` | MediaProfileTrack[] | Yes | Inline media profile (video/audio/cc tracks). See [Media Profile](#media-profile) below for track structure. |
+
+Note: only inline `media_profile` is accepted; a pre-configured profile name is not supported.
+
+**Metadata entry fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `language` | string | Language code (e.g. `en_CA`) |
+| `title` | string | Asset title |
+| `description` | string | Asset description |
+
+#### AI flags
 
 Supported values for `ai_flags`:
 
@@ -65,27 +92,7 @@ The array must match **exactly one** of the following combinations:
 ["AUTO_GENERATE_DEFAULT", "AUTO_GENERATE_SOURCE_METADATA"]
 ```
 
-**MediaAsset fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `ext_id` | string | Yes | Identifier for the asset in the external MAM/DAM system |
-| `uri` | string | Yes | Location of the asset. Supported schemes: `https`, `s3`, `gcs` |
-
-Each MediaAsset must include **exactly one** of:
-
-- `media_profile` (array) -- inline profile defining the media file structure
-- `media_profile_name` (string) -- name of a pre-configured media profile
-
-These two fields are mutually exclusive.
-
-**Metadata entry fields:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `language` | string | Language code (e.g. `en_CA`) |
-| `title` | string | Asset title |
-| `description` | string | Asset description |
+When `ai_flags` is provided the upload is processed **asynchronously** and the API returns **202 Accepted** with only a `job_id` and `status` of `Queued`. Poll `/v2/status` with the returned `job_id` to track progress.
 
 #### Media Profile
 
@@ -95,10 +102,12 @@ When providing an inline `media_profile`, each entry is a track with a `group_ty
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `track_info.codec` | string | `AVC`, `HEVC`, `MPEG-4 Part 2`, `Apple ProRes 422`, `AVC-Intra`, `JPEG2000` |
+| `track_info.track_id` | string | Opaque caller-supplied track identifier (e.g. an asset ID from an upstream MAM system). Optional. |
+| `track_info.codec` | string | Master: `mpeg-2-video`, `dnxhd-sq`, `avc-intra`, `prores422-hq`, `jpeg2000`, `prores422`, `dnxhr-sq`, `xavc-i`, `dnxhr-hq`, `prores4444`, `prores422-lt`, `dnxhd-hq`, `dnxhd`, `dnxhd-hqx`, `dnxhr-444`, `dnxhr-hqx`, `dnxhd-lb`, `dnxhd-tr`. Proxy: only `avc`. |
 | `track_info.bitRate` | integer | Bit rate in bits per second |
 | `track_info.frameRate` | object | `{ numerator, denominator }` (e.g. 30000/1001 for 29.97fps) |
 | `track_info.frameSize` | object | `{ width, height }` in pixels |
+| `track_info.offset_sec` | number | Offset of the track relative to the primary timeline, in seconds. |
 
 **Audio track** (`group_type: audio`)
 
@@ -107,9 +116,11 @@ When providing an inline `media_profile`, each entry is a track with a `group_ty
 | `audio_kind` | string | Audio content type: `PRM`, `SAP`, `HI`, `DV`, `DX`, `MX`, `FX`, `FFX`, `ME`, `OP`, `MESP`, `DME`, `NDME`, `PNAR`, `ONAR`, `VO`, `VI`, `CM`, `LCM`, `MOS` |
 | `audio_group` | string | Channel configuration: `ST`, `DM`, `LtRt`, `DNS`, `3.0`, `4.0`, `5.0`, `5.1`, `5.1EX`, `6.0`, `6.1`, `7.0DS`, `7.1DS`, `7.1SDS`, `HA`, `VA` |
 | `language` | string | Language code (e.g. `en-US`) |
-| `track_info.codec` | string | `AAC`, `AC3`, `EAC3`, `FLAC`, `PCM-16`, `PCM-24` |
+| `track_info.track_id` | string | Opaque caller-supplied track identifier (e.g. an asset ID from an upstream MAM system). Optional. |
+| `track_info.codec` | string | `aac`, `pcm` |
 | `track_info.bitRate` | integer | Bit rate in bits per second |
 | `track_info.sampleRate` | integer | Sample rate in Hz |
+| `track_info.offset_sec` | number | Offset of the track relative to the primary timeline, in seconds. Used to align sidecar audio files. |
 | `channel_layouts` | array | Channel mapping entries with `channel_locator` (required) and `audio_channel` |
 
 Supported `audio_channel` values: `L`, `R`, `C`, `LFE`, `Ls`, `Rs`, `Lss`, `Rss`, `Lrs`, `Rrs`, `Lc`, `Rc`, `Cs`, `HI`, `VIN`, `Lt`, `Rt`, `Lst`, `Rst`, `S`, `M1`, `M2`
@@ -118,224 +129,10 @@ Supported `audio_channel` values: `L`, `R`, `C`, `LFE`, `Ls`, `Rs`, `Lss`, `Rss`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `format` | string | `CEA-608`, `EIA-608`, `CEA-708`, `EIA-708` |
+| `track_id` | string | Opaque caller-supplied track identifier (e.g. an asset ID from an upstream MAM system). Optional. |
+| `format` | string | `CEA-608`, `EIA-608`, `CEA-708`, `EIA-708`, `SRT`, `TTML`, `WebVTT`, `PAC`, `SCC`, `IMSC` |
 | `language` | string | Language code (e.g. `en-US`) |
-
-#### Example: Upload with inline media profile
-
-```json
-{
-  "master": {
-    "ext_id": "asset-001",
-    "uri": "s3://bucket/media/video.mxf",
-    "media_profile": [
-      {
-        "group_type": "video",
-        "track_info": {
-          "codec": "AVC",
-          "bitRate": 50000000,
-          "frameRate": { "numerator": 30000, "denominator": 1001 },
-          "frameSize": { "width": 1920, "height": 1080 }
-        }
-      },
-      {
-        "group_type": "audio",
-        "audio_kind": "PRM",
-        "audio_group": "ST",
-        "language": "en-US",
-        "track_info": {
-          "codec": "PCM-24",
-          "bitRate": 2304000,
-          "sampleRate": 48000
-        },
-        "channel_layouts": [
-          { "channel_locator": "1", "audio_channel": "L" },
-          { "channel_locator": "2", "audio_channel": "R" }
-        ]
-      },
-      {
-        "group_type": "cc",
-        "format": "CEA-608",
-        "language": "en-US"
-      }
-    ]
-  },
-  "proxy": {
-    "ext_id": "asset-001-proxy",
-    "uri": "s3://bucket/media/video_proxy.mp4",
-    "media_profile": [
-      {
-        "group_type": "video",
-        "track_info": {
-          "codec": "AVC",
-          "bitRate": 5000000,
-          "frameRate": { "numerator": 30000, "denominator": 1001 },
-          "frameSize": { "width": 1280, "height": 720 }
-        }
-      },
-      {
-        "group_type": "audio",
-        "audio_kind": "PRM",
-        "audio_group": "ST",
-        "language": "en-US",
-        "track_info": {
-          "codec": "AAC",
-          "bitRate": 192000,
-          "sampleRate": 48000
-        },
-        "channel_layouts": [
-          { "channel_locator": "1", "audio_channel": "L" },
-          { "channel_locator": "2", "audio_channel": "R" }
-        ]
-      }
-    ]
-  },
-  "metadata": [
-    {
-      "language": "en-US",
-      "title": "Sample Video",
-      "description": "A sample media asset"
-    }
-  ]
-}
-```
-
-#### Example: Upload with pre-configured profile name
-
-```json
-{
-  "master": {
-    "ext_id": "asset-002",
-    "uri": "s3://bucket/media/video.mxf",
-    "media_profile_name": "HD-1080p-Stereo"
-  },
-  "proxy": {
-    "ext_id": "asset-002-proxy",
-    "uri": "s3://bucket/media/video_proxy.mp4",
-    "media_profile_name": "Proxy-720p"
-  },
-  "metadata": [
-    {
-      "language": "en-US",
-      "title": "Sample Video",
-      "description": "A sample media asset"
-    }
-  ]
-}
-```
-
-#### Example: Async upload with ai_flags
-
-Including `ai_flags` switches the endpoint to asynchronous mode. The API returns **202 Accepted** with a `job_id` that can be polled via `/v2/status`.
-
-```json
-{
-  "master": {
-    "ext_id": "asset-003",
-    "uri": "s3://bucket/media/video.mxf",
-    "media_profile_name": "HD-1080p-Stereo"
-  },
-  "proxy": {
-    "ext_id": "asset-003-proxy",
-    "uri": "s3://bucket/media/video_proxy.mp4",
-    "media_profile_name": "Proxy-720p"
-  },
-  "priority": 500,
-  "email": "producer@example.com",
-  "ai_flags": ["AUTO_GENERATE_SOURCE_METADATA", "AUTO_DETECT_SCENES"],
-  "metadata": [
-    {
-      "language": "en-US",
-      "title": "Sample Video",
-      "description": "A sample media asset"
-    }
-  ]
-}
-```
-
-Response (202):
-
-```json
-{
-  "job_id": "1015825c-7c90-4042-8513-24585fb9c235",
-  "status": "Queued"
-}
-```
-
-#### Responses
-
-**200 OK** -- Asset already exists; returns existing asset info.
-
-**201 Created** -- Asset created successfully.
-
-Response body for both 200 and 201:
-
-```json
-{
-  "job_id": "string",
-  "ext_id": "string",
-  "uri": "string",
-  "media_id": "string",
-  "duration": 0,
-  "mimeType": "string",
-  "status": "string"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `job_id` | string | Job ID for tracking upload processing via `/v2/status` |
-| `ext_id` | string | External asset identifier |
-| `uri` | string | Location of the uploaded asset |
-| `media_id` | string | Internal identifier assigned to the asset |
-| `duration` | integer | Duration in milliseconds |
-| `mimeType` | string | MIME type of the asset |
-| `status` | string | Processing status |
-
-##### Async response with ai_flags
-
-When `ai_flags` is provided in the request, the upload is processed **asynchronously** and the API always returns **202 Accepted** instead of 200/201. The response contains only the `job_id` and a `status` of `Queued`. Poll `/v2/status` with the returned `job_id` to track progress.
-
-```json
-{
-  "job_id": "1015825c-7c90-4042-8513-24585fb9c235",
-  "status": "Queued"
-}
-```
-
----
-
-### POST /v3/upload
-
-Same purpose as `/v2/upload`, but `master` and `proxy` are **objects** that wrap a `media_assets` array, so a single request can register multiple master and proxy assets together (e.g. multi-track or multi-rendition deliveries). The other request fields (`priority`, `email`, `ai_flags`, `metadata`) and response codes are identical to `/v2/upload`.
-
-#### Request Body
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `master` | MediaAssetV3Group | Yes | Master asset group containing a `media_assets` array. |
-| `proxy` | MediaAssetV3Group | No | Proxy asset group containing a `media_assets` array. |
-| `priority` | integer | No | Processing priority, `0`-`1000` (default `0`). Same semantics as `/v2/upload`. |
-| `email` | string | No | Email address of the requesting user. |
-| `ai_flags` | string[] | No | AI processing flags. Same combination rules as `/v2/upload`. When provided, the request is processed asynchronously and returns 202. |
-| `metadata` | array | No | Localized metadata entries. |
-
-**MediaAssetV3Group fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `ext_id` | string | Yes | Identifier for this asset group in the external MAM / DAM system. |
-| `media_assets` | MediaAssetV3Item[] | Yes | One or more media assets in the group. At least one entry. |
-
-**MediaAssetV3Item fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `ext_asset_id` | string | Yes | Identifier for the asset within this upload group |
-| `uri` | string | Yes | Location of the asset. Supported schemes: `https`, `s3`, `gcs` |
-| `media_profile` | MediaProfileTrack[] | Yes | Inline media profile (video/audio/cc tracks). See [/v2/upload media profile](#media-profile) for track structure. |
-
-Note: unlike `/v2/upload`, `MediaAssetV3Item` does not support `media_profile_name` -- only inline `media_profile` is accepted.
+| `offset_sec` | number | Offset relative to the primary timeline, in seconds; used to align sidecar caption files. Optional. |
 
 #### Example: Master only (no proxy)
 
@@ -347,14 +144,17 @@ Note: unlike `/v2/upload`, `MediaAssetV3Item` does not support `media_profile_na
       {
         "ext_asset_id": "master-video-003",
         "uri": "s3://bucket/media/video.mxf",
+        "duration": 120.5,
+        "size": 7516192768,
         "media_profile": [
           {
             "group_type": "video",
             "track_info": {
-              "codec": "AVC",
+              "codec": "prores422",
               "bitRate": 50000000,
               "frameRate": { "numerator": 30000, "denominator": 1001 },
-              "frameSize": { "width": 1920, "height": 1080 }
+              "frameSize": { "width": 1920, "height": 1080 },
+              "offset_sec": 0
             }
           }
         ]
@@ -383,14 +183,17 @@ Note: unlike `/v2/upload`, `MediaAssetV3Item` does not support `media_profile_na
       {
         "ext_asset_id": "master-video-001",
         "uri": "s3://bucket/media/video.mxf",
+        "duration": 120.5,
+        "size": 7516192768,
         "media_profile": [
           {
             "group_type": "video",
             "track_info": {
-              "codec": "AVC",
+              "codec": "prores422",
               "bitRate": 50000000,
               "frameRate": { "numerator": 30000, "denominator": 1001 },
-              "frameSize": { "width": 1920, "height": 1080 }
+              "frameSize": { "width": 1920, "height": 1080 },
+              "offset_sec": 0
             }
           }
         ]
@@ -398,6 +201,8 @@ Note: unlike `/v2/upload`, `MediaAssetV3Item` does not support `media_profile_na
       {
         "ext_asset_id": "master-audio-001",
         "uri": "s3://bucket/media/audio.wav",
+        "duration": 120.5,
+        "size": 34603008,
         "media_profile": [
           {
             "group_type": "audio",
@@ -405,14 +210,29 @@ Note: unlike `/v2/upload`, `MediaAssetV3Item` does not support `media_profile_na
             "audio_group": "ST",
             "language": "en-US",
             "track_info": {
-              "codec": "PCM-24",
+              "codec": "pcm",
               "bitRate": 2304000,
-              "sampleRate": 48000
+              "sampleRate": 48000,
+              "offset_sec": 0
             },
             "channel_layouts": [
               { "channel_locator": "1", "audio_channel": "L" },
               { "channel_locator": "2", "audio_channel": "R" }
             ]
+          }
+        ]
+      },
+      {
+        "ext_asset_id": "master-cc-001",
+        "uri": "s3://bucket/media/captions.scc",
+        "duration": 120.5,
+        "size": 1362,
+        "media_profile": [
+          {
+            "group_type": "cc",
+            "format": "SCC",
+            "language": "en",
+            "offset_sec": -1.18
           }
         ]
       }
@@ -424,14 +244,17 @@ Note: unlike `/v2/upload`, `MediaAssetV3Item` does not support `media_profile_na
       {
         "ext_asset_id": "proxy-video-001",
         "uri": "s3://bucket/media/video_proxy.mp4",
+        "duration": 120.5,
+        "size": 75161927,
         "media_profile": [
           {
             "group_type": "video",
             "track_info": {
-              "codec": "AVC",
+              "codec": "avc",
               "bitRate": 5000000,
               "frameRate": { "numerator": 30000, "denominator": 1001 },
-              "frameSize": { "width": 1280, "height": 720 }
+              "frameSize": { "width": 1280, "height": 720 },
+              "offset_sec": 0
             }
           }
         ]
@@ -452,18 +275,18 @@ Note: unlike `/v2/upload`, `MediaAssetV3Item` does not support `media_profile_na
 
 #### Responses
 
-Same as `/v2/upload`:
-
 - **200 OK** -- asset group already exists
 - **201 Created** -- asset group created
 - **202 Accepted** -- returned when `ai_flags` is provided; body is `{ "job_id": "...", "status": "Queued" }`
 - **400 / 401 / 403** -- standard error responses
 
+The 200/201 response body matches the upload response fields: `job_id`, `ext_id`, `uri`, `media_id`, `duration`, `mimeType`, `status`.
+
 ---
 
 ### POST /v2/smart-crop
 
-Generate a video from a sequence of media assets and export to a destination based on a predefined export template. All media assets in the sequence must have been previously added via `/v2/upload`.
+Generate a video from a sequence of media assets and export to a destination based on a predefined export template. All media assets in the sequence must have been previously added via `/v3/upload`.
 
 #### Request Body
 
@@ -479,7 +302,7 @@ Generate a video from a sequence of media assets and export to a destination bas
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `ext_id` | string | Yes | External asset identifier. Must be the `ext_id` of the **master** asset (not the proxy) previously registered via `/v2/upload`. |
+| `ext_id` | string | Yes | External asset identifier. Must be the **master** group `ext_id` (not the proxy) previously registered via `/v3/upload`. |
 | `start_timecode` | string | No | Start timecode for the clip |
 | `end_timecode` | string | No | End timecode for the clip |
 
@@ -674,7 +497,7 @@ Returns an array of job status objects. The shape varies by status:
 
 ## Typical Workflow
 
-1. **Upload assets** -- `POST /v2/upload` for each media asset (master and optional proxy)
+1. **Upload assets** -- `POST /v3/upload` to register the master (and optional proxy) asset groups
 2. **Create a smart-crop job** -- `POST /v2/smart-crop` with the sequence of uploaded assets
 3. **Poll for status** -- `POST /v2/status` with the `job_id` from step 2 until status is `Completed` or `Failed`
 

@@ -1,237 +1,13 @@
 openapi: '3.0.3'
 info:
   title: AI Studio Public API
-  version: '6.3'
+  version: '6.3.1'
 servers:
   - url: https://verticalizer.videoai.wbd.com/genai-api
 paths:
-  /v2/upload:
-    post:
-      summary: Add or update a media asset with optional metadata. If an asset with the same ext_id already exists, it will be updated with the new information and the existing media_id will be returned.
-      security:
-        - ApiKeyAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - master
-              properties:
-                master:
-                  $ref: '#/components/schemas/MediaAsset'
-                proxy:
-                  $ref: '#/components/schemas/MediaAsset'
-                priority:
-                  type: integer
-                  minimum: 0
-                  maximum: 1000
-                  default: 0
-                  description: Processing priority. 0 is lowest priority, 1000 is highest priority. Jobs are processed based on this priority and the request time (earlier requests win within the same priority).
-                email:
-                  type: string
-                  format: email
-                  description: Email address of the requesting user.
-                ai_flags:
-                  description: |
-                    AI processing flags to apply to the uploaded asset. When provided, the request is processed asynchronously and the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status.
-
-                    Allowed combinations (exactly one of):
-                      1. [AUTO_GENERATE_ALL] by itself
-                      2. [AUTO_GENERATE_DEFAULT] by itself
-                      3. Any non-empty subset of {AUTO_GENERATE_SOURCE_METADATA, AUTO_DETECT_SCENES}
-
-                    AUTO_GENERATE_ALL and AUTO_GENERATE_DEFAULT are mutually exclusive with each other and with the granular flags (AUTO_GENERATE_SOURCE_METADATA, AUTO_DETECT_SCENES).
-                  oneOf:
-                    - title: AUTO_GENERATE_ALL only
-                      type: array
-                      minItems: 1
-                      maxItems: 1
-                      items:
-                        type: string
-                        enum:
-                          - AUTO_GENERATE_ALL
-                    - title: AUTO_GENERATE_DEFAULT only
-                      type: array
-                      minItems: 1
-                      maxItems: 1
-                      items:
-                        type: string
-                        enum:
-                          - AUTO_GENERATE_DEFAULT
-                    - title: Granular flags
-                      type: array
-                      minItems: 1
-                      maxItems: 2
-                      uniqueItems: true
-                      items:
-                        type: string
-                        enum:
-                          - AUTO_GENERATE_SOURCE_METADATA
-                          - AUTO_DETECT_SCENES
-                metadata:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      language:
-                        type: string
-                        example: en_CA
-                      title:
-                        type: string
-                      description:
-                        type: string
-            examples:
-              with_media_profile:
-                summary: Upload using inline media profile
-                value:
-                  master:
-                    ext_id: asset-001
-                    uri: s3://bucket/media/video.mxf
-                    media_profile:
-                      - group_type: video
-                        track_info:
-                          codec: AVC
-                          bitRate: 50000000
-                          frameRate:
-                            numerator: 30000
-                            denominator: 1001
-                          frameSize:
-                            width: 1920
-                            height: 1080
-                      - group_type: audio
-                        audio_kind: PRM
-                        audio_group: ST
-                        language: en-US
-                        track_info:
-                          codec: PCM-24
-                          bitRate: 2304000
-                          sampleRate: 48000
-                        channel_layouts:
-                          - channel_locator: "1"
-                            audio_channel: L
-                          - channel_locator: "2"
-                            audio_channel: R
-                      - group_type: cc
-                        format: CEA-608
-                        language: en-US
-                  proxy:
-                    ext_id: asset-001-proxy
-                    uri: s3://bucket/media/video_proxy.mp4
-                    media_profile:
-                      - group_type: video
-                        track_info:
-                          codec: AVC
-                          bitRate: 5000000
-                          frameRate:
-                            numerator: 30000
-                            denominator: 1001
-                          frameSize:
-                            width: 1280
-                            height: 720
-                      - group_type: audio
-                        audio_kind: PRM
-                        audio_group: ST
-                        language: en-US
-                        track_info:
-                          codec: AAC
-                          bitRate: 192000
-                          sampleRate: 48000
-                        channel_layouts:
-                          - channel_locator: "1"
-                            audio_channel: L
-                          - channel_locator: "2"
-                            audio_channel: R
-                  metadata:
-                    - language: en-US
-                      title: Sample Video
-                      description: A sample media asset
-              with_media_profile_name:
-                summary: Upload using a pre-configured media profile
-                value:
-                  master:
-                    ext_id: asset-002
-                    uri: s3://bucket/media/video.mxf
-                    media_profile_name: HD-1080p-Stereo
-                  proxy:
-                    ext_id: asset-002-proxy
-                    uri: s3://bucket/media/video_proxy.mp4
-                    media_profile_name: Proxy-720p
-                  metadata:
-                    - language: en-US
-                      title: Sample Video
-                      description: A sample media asset
-              with_ai_flags:
-                summary: Async upload with AI processing flags (returns 202)
-                value:
-                  master:
-                    ext_id: asset-003
-                    uri: s3://bucket/media/video.mxf
-                    media_profile_name: HD-1080p-Stereo
-                  proxy:
-                    ext_id: asset-003-proxy
-                    uri: s3://bucket/media/video_proxy.mp4
-                    media_profile_name: Proxy-720p
-                  priority: 500
-                  email: producer@example.com
-                  ai_flags:
-                    - AUTO_GENERATE_SOURCE_METADATA
-                    - AUTO_DETECT_SCENES
-                  metadata:
-                    - language: en-US
-                      title: Sample Video
-                      description: A sample media asset
-      responses:
-        '200':
-          description: Media asset already exists, returning existing asset information
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UploadResponse'
-        '201':
-          description: Media asset created successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UploadResponse'
-        '202':
-          description: Asynchronous upload accepted. Returned when ai_flags is provided. Poll /v2/status with the returned job_id to track progress.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  job_id:
-                    type: string
-                    description: AI Studio Job ID. Use this to poll /v2/status.
-                    example: 1015825c-7c90-4042-8513-24585fb9c235
-                  status:
-                    type: string
-                    enum:
-                      - Queued
-                    example: Queued
-        '400':
-          description: Invalid or Expired API Key
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BadRequestResponse'
-        '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UnauthorizedResponse'
-        '403':
-          description: Permission Denied
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ForbiddenResponse'
   /v3/upload:
     post:
-      summary: Add or update a media asset group with optional metadata. Similar to /v2/upload, but master and proxy are arrays so a single upload can register multiple master and proxy assets together (e.g. multi-track or multi-rendition deliveries).
+      summary: Add or update a media asset group with optional metadata. master and proxy each wrap a media_assets array, so a single upload can register multiple master and proxy assets together (e.g. multi-track or multi-rendition deliveries).
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -246,7 +22,7 @@ paths:
                 master:
                   $ref: '#/components/schemas/MediaAssetV3Group'
                 proxy:
-                  $ref: '#/components/schemas/MediaAssetV3Group'
+                  $ref: '#/components/schemas/ProxyMediaAssetV3Group'
                 priority:
                   type: integer
                   minimum: 0
@@ -315,10 +91,12 @@ paths:
                     media_assets:
                       - ext_asset_id: master-video-003
                         uri: s3://bucket/media/video.mxf
+                        duration: 120.5
+                        size: 7516192768
                         media_profile:
                           - group_type: video
                             track_info:
-                              codec: AVC
+                              codec: prores422
                               bitRate: 50000000
                               frameRate:
                                 numerator: 30000
@@ -326,6 +104,7 @@ paths:
                               frameSize:
                                 width: 1920
                                 height: 1080
+                              offset_sec: 0
                   priority: 500
                   email: producer@example.com
                   metadata:
@@ -340,10 +119,12 @@ paths:
                     media_assets:
                       - ext_asset_id: master-video-001
                         uri: s3://bucket/media/video.mxf
+                        duration: 120.5
+                        size: 7516192768
                         media_profile:
                           - group_type: video
                             track_info:
-                              codec: AVC
+                              codec: prores422
                               bitRate: 50000000
                               frameRate:
                                 numerator: 30000
@@ -351,31 +132,46 @@ paths:
                               frameSize:
                                 width: 1920
                                 height: 1080
+                              offset_sec: 0
                       - ext_asset_id: master-audio-001
                         uri: s3://bucket/media/audio.wav
+                        duration: 120.5
+                        size: 34603008
                         media_profile:
                           - group_type: audio
                             audio_kind: PRM
                             audio_group: ST
                             language: en-US
                             track_info:
-                              codec: PCM-24
+                              codec: pcm
                               bitRate: 2304000
                               sampleRate: 48000
+                              offset_sec: 0
                             channel_layouts:
                               - channel_locator: "1"
                                 audio_channel: L
                               - channel_locator: "2"
                                 audio_channel: R
+                      - ext_asset_id: master-cc-001
+                        uri: s3://bucket/media/captions.scc
+                        duration: 120.5
+                        size: 1362
+                        media_profile:
+                          - group_type: cc
+                            format: SCC
+                            language: en
+                            offset_sec: -1.18
                   proxy:
                     ext_id: asset-group-001-proxy
                     media_assets:
                       - ext_asset_id: proxy-video-001
                         uri: s3://bucket/media/video_proxy.mp4
+                        duration: 120.5
+                        size: 75161927
                         media_profile:
                           - group_type: video
                             track_info:
-                              codec: AVC
+                              codec: avc
                               bitRate: 5000000
                               frameRate:
                                 numerator: 30000
@@ -383,6 +179,7 @@ paths:
                               frameSize:
                                 width: 1280
                                 height: 720
+                              offset_sec: 0
                   priority: 500
                   email: producer@example.com
                   metadata:
@@ -397,10 +194,12 @@ paths:
                     media_assets:
                       - ext_asset_id: master-video-002
                         uri: s3://bucket/media/video.mxf
+                        duration: 120.5
+                        size: 7516192768
                         media_profile:
                           - group_type: video
                             track_info:
-                              codec: AVC
+                              codec: prores422
                               bitRate: 50000000
                               frameRate:
                                 numerator: 30000
@@ -408,15 +207,18 @@ paths:
                               frameSize:
                                 width: 1920
                                 height: 1080
+                              offset_sec: 0
                   proxy:
                     ext_id: asset-group-002-proxy
                     media_assets:
                       - ext_asset_id: proxy-video-002
                         uri: s3://bucket/media/video_proxy.mp4
+                        duration: 120.5
+                        size: 75161927
                         media_profile:
                           - group_type: video
                             track_info:
-                              codec: AVC
+                              codec: avc
                               bitRate: 5000000
                               frameRate:
                                 numerator: 30000
@@ -424,6 +226,7 @@ paths:
                               frameSize:
                                 width: 1280
                                 height: 720
+                              offset_sec: 0
                   ai_flags:
                     - AUTO_GENERATE_SOURCE_METADATA
                     - AUTO_DETECT_SCENES
@@ -480,7 +283,7 @@ paths:
                 $ref: '#/components/schemas/ForbiddenResponse'
   /v2/smart-crop:
     post:
-      summary: Generate Video from a sequence of media assets and export to destination based on a predefined export template. The media assets in the sequence must have already been added to the system via the /v2/upload endpoint.
+      summary: Generate Video from a sequence of media assets and export to destination based on a predefined export template. The media assets in the sequence must have already been added to the system via the /v3/upload endpoint.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -505,7 +308,7 @@ paths:
                     properties:
                       ext_id:
                         type: string
-                        description: Identifier for the Media Asset in the external MAM / DAM system. This must be the ext_id of the master asset (not the proxy) previously registered via /v2/upload.
+                        description: Identifier for the Media Asset in the external MAM / DAM system. This must be the master group ext_id (not the proxy) previously registered via /v3/upload.
                       start_timecode:
                         type: string
                         description: Start timecode for the clip
@@ -756,40 +559,6 @@ paths:
 
 components:
   schemas:
-    MediaAsset:
-      allOf:
-        - type: object
-          required:
-            - ext_id
-            - uri
-          properties:
-            ext_id:
-              type: string
-              description: Identifier for the Media Asset in the external MAM / DAM system
-            uri:
-              type: string
-              description: "Location of the Media Asset. Supported schemes include: https, s3, gcs"
-        - oneOf:
-            - required:
-                - media_profile
-              properties:
-                media_profile:
-                  type: array
-                  description: Media asset profile defining the structure of the media file. If media_profile_name is not provided, this profile will be applied to the Media Asset
-                  items:
-                    $ref: '#/components/schemas/MediaProfileTrack'
-              not:
-                required:
-                  - media_profile_name
-            - required:
-                - media_profile_name
-              properties:
-                media_profile_name:
-                  type: string
-                  description: Name of a pre-configured media profile to apply to the Media Asset
-              not:
-                required:
-                  - media_profile
     MediaAssetV3Group:
       type: object
       required:
@@ -805,6 +574,21 @@ components:
           description: One or more media assets that make up this group.
           items:
             $ref: '#/components/schemas/MediaAssetV3Item'
+    ProxyMediaAssetV3Group:
+      type: object
+      required:
+        - ext_id
+        - media_assets
+      properties:
+        ext_id:
+          type: string
+          description: Identifier for this proxy asset group in the external MAM / DAM system.
+        media_assets:
+          type: array
+          minItems: 1
+          description: One or more proxy media assets that make up this group.
+          items:
+            $ref: '#/components/schemas/ProxyMediaAssetV3Item'
     MediaAssetV3Item:
       type: object
       required:
@@ -818,11 +602,41 @@ components:
         uri:
           type: string
           description: "Location of the Media Asset. Supported schemes include: https, s3, gcs"
+        duration:
+          type: number
+          description: Duration of the Media Asset in seconds.
+        size:
+          type: integer
+          description: Size of the Media Asset in bytes.
         media_profile:
           type: array
           description: Media asset profile defining the structure of the media file.
           items:
             $ref: '#/components/schemas/MediaProfileTrack'
+    ProxyMediaAssetV3Item:
+      type: object
+      required:
+        - ext_asset_id
+        - uri
+        - media_profile
+      properties:
+        ext_asset_id:
+          type: string
+          description: Identifier for the Proxy Media Asset within this upload group.
+        uri:
+          type: string
+          description: "Location of the Proxy Media Asset. Supported schemes include: https, s3, gcs"
+        duration:
+          type: number
+          description: Duration of the Proxy Media Asset in seconds.
+        size:
+          type: integer
+          description: Size of the Proxy Media Asset in bytes.
+        media_profile:
+          type: array
+          description: Proxy media asset profile defining the structure of the media file.
+          items:
+            $ref: '#/components/schemas/ProxyMediaProfileTrack'
     MediaProfileTrack:
       oneOf:
         - $ref: '#/components/schemas/VideoTrack'
@@ -832,6 +646,17 @@ components:
         propertyName: group_type
         mapping:
           video: '#/components/schemas/VideoTrack'
+          audio: '#/components/schemas/AudioTrack'
+          cc: '#/components/schemas/CCTrack'
+    ProxyMediaProfileTrack:
+      oneOf:
+        - $ref: '#/components/schemas/ProxyVideoTrack'
+        - $ref: '#/components/schemas/AudioTrack'
+        - $ref: '#/components/schemas/CCTrack'
+      discriminator:
+        propertyName: group_type
+        mapping:
+          video: '#/components/schemas/ProxyVideoTrack'
           audio: '#/components/schemas/AudioTrack'
           cc: '#/components/schemas/CCTrack'
     VideoTrack:
@@ -846,15 +671,30 @@ components:
         track_info:
           type: object
           properties:
+            track_id:
+              type: string
+              description: Opaque caller-supplied track identifier (e.g. an asset ID from an upstream MAM system).
             codec:
               type: string
               enum:
-                - AVC
-                - HEVC
-                - MPEG-4 Part 2
-                - Apple ProRes 422
-                - AVC-Intra
-                - JPEG2000
+                - mpeg-2-video
+                - dnxhd-sq
+                - avc-intra
+                - prores422-hq
+                - jpeg2000
+                - prores422
+                - dnxhr-sq
+                - xavc-i
+                - dnxhr-hq
+                - prores4444
+                - prores422-lt
+                - dnxhd-hq
+                - dnxhd
+                - dnxhd-hqx
+                - dnxhr-444
+                - dnxhr-hqx
+                - dnxhd-lb
+                - dnxhd-tr
             bitRate:
               type: integer
               description: Bit rate in bits per second
@@ -874,6 +714,50 @@ components:
                   type: integer
                 height:
                   type: integer
+            offset_sec:
+              type: number
+              description: Offset of the track relative to the primary timeline, in seconds.
+    ProxyVideoTrack:
+      type: object
+      required:
+        - group_type
+      properties:
+        group_type:
+          type: string
+          enum:
+            - video
+        track_info:
+          type: object
+          properties:
+            track_id:
+              type: string
+              description: Opaque caller-supplied track identifier (e.g. an asset ID from an upstream MAM system).
+            codec:
+              type: string
+              enum:
+                - avc
+            bitRate:
+              type: integer
+              description: Bit rate in bits per second
+            frameRate:
+              type: object
+              description: Frame rate as a rational number
+              properties:
+                numerator:
+                  type: integer
+                denominator:
+                  type: integer
+            frameSize:
+              type: object
+              description: Frame dimensions
+              properties:
+                width:
+                  type: integer
+                height:
+                  type: integer
+            offset_sec:
+              type: number
+              description: Offset of the track relative to the primary timeline, in seconds.
     AudioTrack:
       type: object
       required:
@@ -932,21 +816,23 @@ components:
         track_info:
           type: object
           properties:
+            track_id:
+              type: string
+              description: Opaque caller-supplied track identifier (e.g. an asset ID from an upstream MAM system).
             codec:
               type: string
               enum:
-                - AAC
-                - AC3
-                - EAC3
-                - FLAC
-                - PCM-16
-                - PCM-24
+                - aac
+                - pcm
             bitRate:
               type: integer
               description: Bit rate in bits per second
             sampleRate:
               type: integer
               description: Sample rate in Hz
+            offset_sec:
+              type: number
+              description: Offset of the track relative to the primary timeline, in seconds. Used to align sidecar audio files.
         channel_layouts:
           type: array
           items:
@@ -991,6 +877,9 @@ components:
           type: string
           enum:
             - cc
+        track_id:
+          type: string
+          description: Opaque caller-supplied track identifier (e.g. an asset ID from an upstream MAM system).
         format:
           type: string
           enum:
@@ -998,10 +887,19 @@ components:
             - EIA-608
             - CEA-708
             - EIA-708
+            - SRT
+            - TTML
+            - WebVTT
+            - PAC
+            - SCC
+            - IMSC
         language:
           type: string
           description: Language code (e.g. en-US)
           example: en-US
+        offset_sec:
+          type: number
+          description: Offset of the caption track relative to the primary timeline, in seconds. Used to align sidecar caption files.
     UploadResponse:
       type: object
       properties:
