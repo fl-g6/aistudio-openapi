@@ -1,13 +1,13 @@
 openapi: '3.0.3'
 info:
   title: AI Studio Public API
-  version: '6.3.1'
+  version: '6.3.3'
 servers:
-  - url: https://verticalizer.videoai.wbd.com/genai-api
+  - url: https://demo.cloud.quickplay.com/genai-api
 paths:
   /v3/upload:
     post:
-      summary: Add or update a media asset group with optional metadata. master and proxy each wrap a media_assets array, so a single upload can register multiple master and proxy assets together (e.g. multi-track or multi-rendition deliveries).
+      summary: Add or update a media asset group with optional metadata. master and proxy each wrap a media_assets array, so a single upload can register multiple master and proxy assets together (e.g. multi-track or multi-rendition deliveries). email is mandatory (identifies the requesting user for audit / notification).
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -18,6 +18,7 @@ paths:
               type: object
               required:
                 - master
+                - email
               properties:
                 master:
                   $ref: '#/components/schemas/MediaAssetV3Group'
@@ -37,39 +38,19 @@ paths:
                   description: |
                     AI processing flags to apply to the uploaded assets. When provided, the request is processed asynchronously and the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status.
 
-                    Allowed combinations (exactly one of):
-                      1. [AUTO_GENERATE_ALL] by itself
-                      2. [AUTO_GENERATE_DEFAULT] by itself
-                      3. Any non-empty subset of {AUTO_GENERATE_SOURCE_METADATA, AUTO_DETECT_SCENES}
-
-                    AUTO_GENERATE_ALL and AUTO_GENERATE_DEFAULT are mutually exclusive with each other and with the granular flags (AUTO_GENERATE_SOURCE_METADATA, AUTO_DETECT_SCENES).
-                  oneOf:
-                    - title: AUTO_GENERATE_ALL only
-                      type: array
-                      minItems: 1
-                      maxItems: 1
-                      items:
-                        type: string
-                        enum:
-                          - AUTO_GENERATE_ALL
-                    - title: AUTO_GENERATE_DEFAULT only
-                      type: array
-                      minItems: 1
-                      maxItems: 1
-                      items:
-                        type: string
-                        enum:
-                          - AUTO_GENERATE_DEFAULT
-                    - title: Granular flags
-                      type: array
-                      minItems: 1
-                      maxItems: 2
-                      uniqueItems: true
-                      items:
-                        type: string
-                        enum:
-                          - AUTO_GENERATE_SOURCE_METADATA
-                          - AUTO_DETECT_SCENES
+                    Any non-empty subset of the supported flags is accepted (values must be unique).
+                  type: array
+                  minItems: 1
+                  maxItems: 5
+                  uniqueItems: true
+                  items:
+                    type: string
+                    enum:
+                      - GENERATE_METADATA
+                      - DETECT_SCENES
+                      - REFRAME_9_16
+                      - REFRAME_1_1
+                      - REFRAME_3_4
                 metadata:
                   type: array
                   items:
@@ -227,9 +208,10 @@ paths:
                                 width: 1280
                                 height: 720
                               offset_sec: 0
+                  email: producer@example.com
                   ai_flags:
-                    - AUTO_GENERATE_SOURCE_METADATA
-                    - AUTO_DETECT_SCENES
+                    - GENERATE_METADATA
+                    - DETECT_SCENES
                   metadata:
                     - language: en-US
                       title: Sample Video
@@ -281,9 +263,309 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ForbiddenResponse'
-  /v2/smart-crop:
+  /v3/event:
     post:
-      summary: Generate Video from a sequence of media assets and export to destination based on a predefined export template. The media assets in the sequence must have already been added to the system via the /v3/upload endpoint.
+      summary: Register a live or scheduled event for ingestion and AI processing. The event is identified by an HLS source URL plus a single schedule (start/end). Each POST registers one event occurrence — recurrence is not supported. output_format selects between VOD output (HLS input only, default) and Live output (HLS TS or SRT input, reframed live per REFRAME_* ai_flags). Processing is asynchronous; the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status. email is mandatory (identifies the requesting user for audit / notification).
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - ext_job_id
+                - media_assets
+                - schedule
+                - email
+              properties:
+                ext_job_id:
+                  type: string
+                  description: External job identifier for this event registration.
+                output_format:
+                  type: string
+                  enum:
+                    - VOD
+                    - Live
+                  default: VOD
+                  description: |
+                    Output format for the event.
+
+                    - `VOD` (default): the output is a video-on-demand asset. Input `media_assets.uri` must be an **HLS** URL (`.m3u8`).
+                    - `Live`: the output is a **live stream**, reframed according to the `REFRAME_*` flags supplied in `ai_flags`. Input `media_assets.uri` may be an **HLS TS** URL (`.m3u8`, MPEG-TS segments) or an **SRT** URL (`srt://…`).
+                media_assets:
+                  $ref: '#/components/schemas/EventMediaAsset'
+                schedule:
+                  $ref: '#/components/schemas/EventSchedule'
+                priority:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                  default: 0
+                  description: Processing priority. 0 is lowest priority, 1000 is highest priority. Jobs are processed based on this priority and the request time (earlier requests win within the same priority).
+                email:
+                  type: string
+                  format: email
+                  description: Email address of the requesting user.
+                ai_flags:
+                  description: |
+                    AI processing flags to apply to the event.
+
+                    Any non-empty subset of the supported flags is accepted (values must be unique).
+                  type: array
+                  minItems: 1
+                  maxItems: 5
+                  uniqueItems: true
+                  items:
+                    type: string
+                    enum:
+                      - GENERATE_METADATA
+                      - DETECT_SCENES
+                      - REFRAME_9_16
+                      - REFRAME_1_1
+                      - REFRAME_3_4
+            examples:
+              basic:
+                summary: Single live event
+                value:
+                  ext_job_id: event-group-001
+                  media_assets:
+                    ext_asset_id: live-event-001
+                    uri: https://example.com/live/event-001/master.m3u8
+                  schedule:
+                    ext_event_id: event-001-occurrence
+                    start:
+                      date_time: "2026-06-15T19:00:00Z"
+                    end:
+                      date_time: "2026-06-15T21:00:00Z"
+                    metadata:
+                      - language: en-US
+                        title: Live Sports Event
+                        description: A single live broadcast
+                  priority: 500
+                  email: producer@example.com
+              with_ai_flags:
+                summary: Single live event with AI processing flags (VOD output)
+                value:
+                  ext_job_id: event-group-002
+                  output_format: VOD
+                  media_assets:
+                    ext_asset_id: live-event-002
+                    uri: https://example.com/live/event-002/master.m3u8
+                  schedule:
+                    ext_event_id: event-002-occurrence
+                    start:
+                      date_time: "2026-06-15T19:00:00Z"
+                    end:
+                      date_time: "2026-06-15T21:00:00Z"
+                    metadata:
+                      - language: en-US
+                        title: Weekly Show
+                  priority: 500
+                  email: producer@example.com
+                  ai_flags:
+                    - GENERATE_METADATA
+                    - DETECT_SCENES
+              live_output_srt:
+                summary: Live output with reframing (SRT input)
+                value:
+                  ext_job_id: event-group-003
+                  output_format: Live
+                  media_assets:
+                    ext_asset_id: live-event-003
+                    uri: srt://ingest.example.com:9000?streamid=event-003
+                  schedule:
+                    ext_event_id: event-003-occurrence
+                    start:
+                      date_time: "2026-06-15T19:00:00Z"
+                    end:
+                      date_time: "2026-06-15T21:00:00Z"
+                    metadata:
+                      - language: en-US
+                        title: Live Reframed Broadcast
+                  priority: 500
+                  email: producer@example.com
+                  ai_flags:
+                    - REFRAME_9_16
+                    - REFRAME_1_1
+              live_output_hls_ts:
+                summary: Live output with reframing (HLS TS input)
+                value:
+                  ext_job_id: event-group-004
+                  output_format: Live
+                  media_assets:
+                    ext_asset_id: live-event-004
+                    uri: https://example.com/live/event-004/master.m3u8
+                  schedule:
+                    ext_event_id: event-004-occurrence
+                    start:
+                      date_time: "2026-06-15T19:00:00Z"
+                    end:
+                      date_time: "2026-06-15T21:00:00Z"
+                  priority: 500
+                  email: producer@example.com
+                  ai_flags:
+                    - REFRAME_9_16
+      responses:
+        '202':
+          description: Event registration accepted for asynchronous processing. Poll /v2/status with the returned job_id to track progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    description: AI Studio Job ID. Use this to poll /v2/status.
+                    example: 1015825c-7c90-4042-8513-24585fb9c235
+                  status:
+                    type: string
+                    enum:
+                      - Queued
+                    example: Queued
+        '400':
+          description: Invalid or Expired API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BadRequestResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnauthorizedResponse'
+        '403':
+          description: Permission Denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForbiddenResponse'
+  /v3/event/{ext_job_id}:
+    put:
+      summary: Update an existing event registration. Only schedule, priority, email, and ai_flags may be edited. The event identity (ext_job_id, media_assets) is immutable. email is mandatory on every update; at least one of schedule, priority, or ai_flags must also be supplied. Processing is asynchronous; the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status.
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: ext_job_id
+          required: true
+          schema:
+            type: string
+          description: External job identifier previously supplied on POST /v3/event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              description: |
+                Editable fields for an existing event. `email` is required on every update; at least one of `schedule`, `priority`, or `ai_flags` must also be supplied.
+
+                Any field omitted from the request is left unchanged. `schedule`, when provided, fully replaces the existing schedule.
+              anyOf:
+                - required: [schedule]
+                - required: [priority]
+                - required: [ai_flags]
+              properties:
+                schedule:
+                  $ref: '#/components/schemas/EventSchedule'
+                priority:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+                  description: Processing priority. 0 is lowest priority, 1000 is highest priority.
+                email:
+                  type: string
+                  format: email
+                  description: Email address of the requesting user.
+                ai_flags:
+                  description: |
+                    AI processing flags to apply to the event.
+
+                    Any non-empty subset of the supported flags is accepted (values must be unique).
+                  type: array
+                  minItems: 1
+                  maxItems: 5
+                  uniqueItems: true
+                  items:
+                    type: string
+                    enum:
+                      - GENERATE_METADATA
+                      - DETECT_SCENES
+                      - REFRAME_9_16
+                      - REFRAME_1_1
+                      - REFRAME_3_4
+            examples:
+              update_schedule:
+                summary: Replace the schedule with a new occurrence
+                value:
+                  email: producer@example.com
+                  schedule:
+                    ext_event_id: event-001-occurrence-rescheduled
+                    start:
+                      date_time: "2026-06-22T19:00:00Z"
+                    end:
+                      date_time: "2026-06-22T21:00:00Z"
+                    metadata:
+                      - language: en-US
+                        title: Live Sports Event (Rescheduled)
+              update_priority:
+                summary: Adjust priority only
+                value:
+                  email: producer@example.com
+                  priority: 800
+              update_ai_flags:
+                summary: Change the AI processing flags
+                value:
+                  email: producer@example.com
+                  ai_flags:
+                    - GENERATE_METADATA
+                    - REFRAME_9_16
+                    - REFRAME_1_1
+      responses:
+        '202':
+          description: Event update accepted for asynchronous processing. Poll /v2/status with the returned job_id to track progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    description: AI Studio Job ID. Use this to poll /v2/status.
+                    example: 1015825c-7c90-4042-8513-24585fb9c235
+                  status:
+                    type: string
+                    enum:
+                      - Queued
+                    example: Queued
+        '400':
+          description: Invalid or Expired API Key, or no editable field supplied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BadRequestResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnauthorizedResponse'
+        '403':
+          description: Permission Denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForbiddenResponse'
+        '404':
+          description: No event exists for the supplied ext_job_id.
+  /v3/smart-crop:
+    post:
+      summary: Generate Video from a sequence of media assets and export to destination based on a predefined export template. Media assets in the sequence must be registered — either previously via /v3/upload, or inline in this request via the optional media_assets field.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -295,10 +577,18 @@ paths:
               required:
                 - sequence
                 - ext_job_id
+                - email
               properties:
                 ext_job_id:
                   type: string
                   description: External Job ID
+                media_assets:
+                  type: array
+                  description: |
+                    Optional inline asset registration. When present, the listed media assets are registered as part of this smart-crop call — equivalent to invoking /v3/upload first. Each item has the same shape as a `/v3/upload` `master.media_assets[]` entry. Omit this field when the assets referenced in `sequence[].ext_id` have already been registered via /v3/upload.
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/MediaAssetV3Item'
                 sequence:
                   type: array
                   items:
@@ -308,7 +598,7 @@ paths:
                     properties:
                       ext_id:
                         type: string
-                        description: Identifier for the Media Asset in the external MAM / DAM system. This must be the master group ext_id (not the proxy) previously registered via /v3/upload.
+                        description: Identifier for the Media Asset in the external MAM / DAM system. This must be a master group ext_id (not a proxy) previously registered via /v3/upload.
                       start_timecode:
                         type: string
                         description: Start timecode for the clip
@@ -330,6 +620,36 @@ paths:
                   type: string
                   format: email
                   description: Email address of the requesting user.
+            examples:
+              pre_registered:
+                summary: Assets already registered via /v3/upload
+                value:
+                  ext_job_id: ext-job-001
+                  sequence:
+                    - ext_id: asset-group-001
+                      start_timecode: "00:00:10:00"
+                      end_timecode: "00:00:25:00"
+                  export_template_name:
+                    - HD-1080p-Stereo
+                  priority: 500
+                  email: producer@example.com
+              inline_registration:
+                summary: Inline asset registration + smart-crop in a single call
+                value:
+                  ext_job_id: ext-job-002
+                  media_assets:
+                    - ext_asset_id: master-video-005
+                      uri: http://<HLS URL>
+                      duration: 120.5
+                      size: 7516192768
+                  sequence:
+                    - ext_id: asset-group-005
+                      start_timecode: "00:00:05:00"
+                      end_timecode: "00:00:20:00"
+                  export_template_name:
+                    - HD-1080p-Stereo
+                  priority: 500
+                  email: producer@example.com
       responses:
         '202':
           description: Job accepted successfully
@@ -360,16 +680,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ForbiddenResponse'
-  /v2/smart-crop/{ext_job_id}/publish:
+  /v3/smart-crop/{ext_job_id}/publish:
     post:
-      summary: Publish (render and export) the result of an existing smart-crop job using one or more export templates. The smart-crop job referenced by ext_job_id must have been created via /v2/smart-crop.
+      summary: Publish (render and export) the result of an existing smart-crop job using one or more export templates. The smart-crop job referenced by ext_job_id must have been created via /v3/smart-crop.
       security:
         - ApiKeyAuth: []
       parameters:
         - name: ext_job_id
           in: path
           required: true
-          description: External Job ID of the smart-crop job to publish. Must match the ext_job_id used when the job was created via /v2/smart-crop.
+          description: External Job ID of the smart-crop job to publish. Must match the ext_job_id used when the job was created via /v3/smart-crop.
           schema:
             type: string
       requestBody:
@@ -445,6 +765,63 @@ paths:
                 $ref: '#/components/schemas/ForbiddenResponse'
         '404':
           description: Smart-crop job with the given ext_job_id was not found
+  /v3/job/{ext_job_id}:
+    delete:
+      summary: Delete an existing job. Works for jobs created via either POST /v3/event (event registration) or POST /v3/smart-crop (smart-crop job). Removes the job and cancels any pending processing associated with the given ext_job_id. Any downstream artifacts already produced (e.g. published renders) are unaffected. email is mandatory (identifies the requesting user for audit purposes).
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: path
+          name: ext_job_id
+          required: true
+          schema:
+            type: string
+          description: External job identifier previously supplied on POST /v3/event or POST /v3/smart-crop.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: Email address of the requesting user.
+            examples:
+              delete_event_job:
+                summary: Delete a job created via /v3/event
+                value:
+                  email: producer@example.com
+              delete_smart_crop_job:
+                summary: Delete a job created via /v3/smart-crop
+                value:
+                  email: producer@example.com
+      responses:
+        '204':
+          description: Job deleted successfully. No response body.
+        '400':
+          description: Invalid or Expired API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BadRequestResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnauthorizedResponse'
+        '403':
+          description: Permission Denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForbiddenResponse'
+        '404':
+          description: No job exists for the supplied ext_job_id.
   /v2/status:
     post:
       summary: Get the status of one or more jobs
@@ -556,7 +933,175 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ForbiddenResponse'
-
+  /moments/search:
+    post:
+      summary: Search across previously uploaded media for AI-curated moments matching one or more natural-language prompts. Returns clips ranked by relevance with start/end timestamps, confidence score, preview thumbnail, title, and hashtags.
+      operationId: ExtSearch
+      tags:
+        - Moments Search
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: >-
+                `media_id` and `external_id` are both optional. When provided,
+                supply only one of them — they are mutually exclusive and must
+                not both be present in the same request.
+              required:
+                - prompts
+              not:
+                required:
+                  - media_id
+                  - external_id
+              properties:
+                prompts:
+                  type: array
+                  description: List of prompts for content curation.
+                  items:
+                    type: string
+                    description: Prompt describing the desired content.
+                    example: "Highlight moments from this video"
+                external_id:
+                  type: array
+                  description: Restrict the search to these external identifiers (the `ext_id` values supplied at upload time).
+                  items:
+                    type: string
+                    description: External identifier for the media.
+                    example: "ext-id"
+                media_id:
+                  type: array
+                  description: Restrict the search to these internal media identifiers (UUIDs returned by /v3/upload).
+                  items:
+                    type: string
+                    format: uuid
+                    description: Unique identifier for the media.
+                    example: "95a749ec-1394-eac3-13a5-9ed0ea65e095"
+            examples:
+              by_external_id:
+                summary: Scope the search by external ID
+                value:
+                  prompts:
+                    - "Highlight moments from this video"
+                  external_id:
+                    - "26714368-a156-4d7a-b667-45ac6c08e79a"
+              all_media:
+                summary: Search across all media accessible to the API key
+                value:
+                  prompts:
+                    - "Verstappen winning the Japanese GP"
+      responses:
+        '200':
+          description: List of matching moments — media ID, confidence score, start/end times, rank, and metadata.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                    - start
+                    - end
+                    - media_id
+                    - confidence_score
+                    - rank
+                  properties:
+                    start:
+                      type: integer
+                      description: Start time of the clip, in seconds, within the source media.
+                      example: 387
+                    end:
+                      type: integer
+                      description: End time of the clip, in seconds.
+                      example: 457
+                    media_id:
+                      type: string
+                      format: uuid
+                      description: Internal identifier of the source media asset.
+                      example: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                    media_external_id:
+                      type: string
+                      description: External identifier supplied at upload time.
+                      example: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                    confidence_score:
+                      type: number
+                      description: Similarity score against the prompt (0.0 – 1.0).
+                      example: 0.5826060175895691
+                    rank:
+                      type: integer
+                      description: Relevance ranking; 1 is the strongest match.
+                      example: 1
+                    preview_uri:
+                      type: string
+                      description: URL of a thumbnail / preview frame for this moment.
+                      example: "https://sandbox2.dev.quickplay.com/media-preview/a56443be-372d-426c-9b8a-e4713d55a2c6/32505da7-af43-4bf7-81e8-ead65785513a/videos/db708bc2-ae70-453e-9839-bc07e84ce160/db708bc2-ae70-453e-9839-bc07e84ce160-0000000064.jpeg"
+                    relevance_reason:
+                      type: string
+                      description: Plain-language explanation of why the moment matched.
+                      example: "This entry directly matches the query by describing Max Verstappen's dominant victory at the Japanese Grand Prix, mentioning his win, the location (Suzuka), and the key players (Verstappen, Norris, Piastri). The title, summary, keywords, and description all strongly align with the query."
+                    title:
+                      type: string
+                      description: Generated title for the moment.
+                      example: "Max Verstappen's Dominant Japanese GP Victory"
+                    hashtags:
+                      type: string
+                      description: Comma-separated tags attached to the moment.
+                      example: "#F1,#JapaneseGP,#MaxVerstappen,#RedBullRacing,#Winner,#Suzuka"
+              examples:
+                three_moments:
+                  summary: Three ranked moments from a Japanese GP broadcast
+                  value:
+                    - start: 387
+                      end: 457
+                      media_id: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                      media_external_id: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                      confidence_score: 0.5826060175895691
+                      rank: 1
+                      preview_uri: "https://sandbox2.dev.quickplay.com/media-preview/a56443be-372d-426c-9b8a-e4713d55a2c6/32505da7-af43-4bf7-81e8-ead65785513a/videos/db708bc2-ae70-453e-9839-bc07e84ce160/db708bc2-ae70-453e-9839-bc07e84ce160-0000000064.jpeg"
+                      title: "Max Verstappen's Dominant Japanese GP Victory"
+                      hashtags: "#F1,#JapaneseGP,#MaxVerstappen,#RedBullRacing,#Winner,#Suzuka"
+                      relevance_reason: "This entry directly matches the query by describing Max Verstappen's dominant victory at the Japanese Grand Prix, mentioning his win, the location (Suzuka), and the key players (Verstappen, Norris, Piastri). The title, summary, keywords, and description all strongly align with the query."
+                    - start: 458
+                      end: 482
+                      media_id: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                      media_external_id: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                      confidence_score: 0.5418363809585571
+                      rank: 3
+                      preview_uri: "https://sandbox2.dev.quickplay.com/media-preview/a56443be-372d-426c-9b8a-e4713d55a2c6/32505da7-af43-4bf7-81e8-ead65785513a/videos/db708bc2-ae70-453e-9839-bc07e84ce160/db708bc2-ae70-453e-9839-bc07e84ce160-0000000076.jpeg"
+                      title: "Verstappen's Japanese GP Victory Celebration"
+                      hashtags: "#F1,#JapaneseGP,#Verstappen,#RedBullRacing,#Podium"
+                      relevance_reason: "This entry is relevant because it details Max Verstappen's victory celebration at the Japanese Grand Prix, including podium details and the final race classification. While it focuses more on the celebration, it still directly relates to Verstappen's win at the specified event."
+                    - start: 11
+                      end: 62
+                      media_id: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                      media_external_id: "db708bc2-ae70-453e-9839-bc07e84ce160"
+                      confidence_score: 0.5648645162582397
+                      rank: 4
+                      preview_uri: "https://sandbox2.dev.quickplay.com/media-preview/a56443be-372d-426c-9b8a-e4713d55a2c6/32505da7-af43-4bf7-81e8-ead65785513a/videos/db708bc2-ae70-453e-9839-bc07e84ce160/db708bc2-ae70-453e-9839-bc07e84ce160-0000000001.jpeg"
+                      title: "Japanese Grand Prix: Frantic Race Start"
+                      hashtags: "#F1,#JapaneseGP,#Suzuka,#Formula1,#Motorsport,#Racing"
+                      relevance_reason: "This entry is partially relevant as it describes the start of the Japanese Grand Prix at Suzuka, mentioning Max Verstappen defending his lead. However, it focuses on the initial moments of the race rather than the overall dominant victory."
+        '400':
+          description: Invalid or Expired API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BadRequestResponse'
+        '401':
+          description: Missing API Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnauthorizedResponse'
+        '403':
+          description: Permission Denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ForbiddenResponse'
 components:
   schemas:
     MediaAssetV3Group:
@@ -589,12 +1134,65 @@ components:
           description: One or more proxy media assets that make up this group.
           items:
             $ref: '#/components/schemas/ProxyMediaAssetV3Item'
+    EventMediaAsset:
+      type: object
+      required:
+        - ext_asset_id
+        - uri
+      properties:
+        ext_asset_id:
+          type: string
+          description: Identifier for the event media asset within this event.
+        uri:
+          type: string
+          description: |
+            Source URL for the live or scheduled event stream. Accepted schemes depend on the request's `output_format`:
+
+            - `output_format: VOD` — HLS only (`https://…/master.m3u8`).
+            - `output_format: Live` — HLS TS (`https://…/master.m3u8`, MPEG-TS segments) or SRT (`srt://…`).
+          example: https://example.com/live/event-001/master.m3u8
+    EventDateTime:
+      type: object
+      required:
+        - date_time
+      properties:
+        date_time:
+          type: string
+          format: date-time
+          description: RFC 3339 date-time string with UTC `Z` suffix or an explicit offset (e.g. `2026-06-15T19:00:00Z` or `2026-06-15T15:00:00-04:00`).
+    EventSchedule:
+      type: object
+      required:
+        - ext_event_id
+        - start
+        - end
+      additionalProperties: false
+      properties:
+        ext_event_id:
+          type: string
+          description: External identifier for this scheduled occurrence.
+        start:
+          $ref: '#/components/schemas/EventDateTime'
+        end:
+          $ref: '#/components/schemas/EventDateTime'
+        metadata:
+          type: array
+          description: Localized metadata for this schedule.
+          items:
+            type: object
+            properties:
+              language:
+                type: string
+                example: en_CA
+              title:
+                type: string
+              description:
+                type: string
     MediaAssetV3Item:
       type: object
       required:
         - ext_asset_id
         - uri
-        - media_profile
       properties:
         ext_asset_id:
           type: string
@@ -618,7 +1216,6 @@ components:
       required:
         - ext_asset_id
         - uri
-        - media_profile
       properties:
         ext_asset_id:
           type: string
