@@ -3,7 +3,7 @@ info:
   title: AI Studio Public API
   version: '6.3.3'
 servers:
-  - url: https://demo.cloud.quickplay.com/genai-api
+  - url: https://sandbox.cloud.quickplay.com/genai-api
 paths:
   /v3/upload:
     post:
@@ -265,7 +265,7 @@ paths:
                 $ref: '#/components/schemas/ForbiddenResponse'
   /v3/event:
     post:
-      summary: Register a live or scheduled event for ingestion and AI processing. The event is identified by an HLS source URL plus a single schedule (start/end). Each POST registers one event occurrence — recurrence is not supported. output_format selects between VOD output (HLS input only, default) and Live output (HLS TS or SRT input, reframed live per REFRAME_* ai_flags). Processing is asynchronous; the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status. email is mandatory (identifies the requesting user for audit / notification).
+      summary: Register a live or scheduled event for ingestion and AI processing. The event is identified by an HLS source URL plus a single schedule (start/end). Each POST registers one event occurrence — recurrence is not supported. output_format selects between VOD output (HLS input only, default) and Live output (HLS TS or SRT input, reframed live per REFRAME_* ai_flags). Processing is asynchronous; the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status. email is mandatory (identifies the requesting user for audit / notification). Passthrough contract — every request attribute is passed through verbatim into the clipping worker task (data.job) and echoed on every worker notification, including email and priority.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -298,6 +298,11 @@ paths:
                   $ref: '#/components/schemas/EventMediaAsset'
                 schedule:
                   $ref: '#/components/schemas/EventSchedule'
+                metadata:
+                  type: array
+                  description: Localized descriptive metadata for the event media asset, mapped to the asset via ext_asset_id. Moved from schedule.metadata in v6.3.4.
+                  items:
+                    $ref: '#/components/schemas/MetadataEntry'
                 priority:
                   type: integer
                   minimum: 0
@@ -339,10 +344,13 @@ paths:
                       date_time: "2026-06-15T19:00:00Z"
                     end:
                       date_time: "2026-06-15T21:00:00Z"
-                    metadata:
-                      - language: en-US
-                        title: Live Sports Event
-                        description: A single live broadcast
+                  metadata:
+                    - ext_asset_id: live-event-001
+                      language: en-US
+                      title: Live Sports Event
+                      category: news
+                      sub-category: documentary
+                      tags: ["#live", "#sports"]
                   priority: 500
                   email: producer@example.com
               with_ai_flags:
@@ -359,9 +367,11 @@ paths:
                       date_time: "2026-06-15T19:00:00Z"
                     end:
                       date_time: "2026-06-15T21:00:00Z"
-                    metadata:
-                      - language: en-US
-                        title: Weekly Show
+                  metadata:
+                    - ext_asset_id: live-event-002
+                      language: en-US
+                      title: Weekly Show
+                      category: news
                   priority: 500
                   email: producer@example.com
                   ai_flags:
@@ -381,9 +391,11 @@ paths:
                       date_time: "2026-06-15T19:00:00Z"
                     end:
                       date_time: "2026-06-15T21:00:00Z"
-                    metadata:
-                      - language: en-US
-                        title: Live Reframed Broadcast
+                  metadata:
+                    - ext_asset_id: live-event-003
+                      language: en-US
+                      title: Live Reframed Broadcast
+                      category: news
                   priority: 500
                   email: producer@example.com
                   ai_flags:
@@ -442,9 +454,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ForbiddenResponse'
+        '409':
+          description: ext_asset_id already registered with a different uri.
   /v3/event/{ext_job_id}:
     put:
-      summary: Update an existing event registration. Only schedule, priority, email, and ai_flags may be edited. The event identity (ext_job_id, media_assets) is immutable. email is mandatory on every update; at least one of schedule, priority, or ai_flags must also be supplied. Processing is asynchronous; the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status.
+      summary: Update an existing event registration. Only schedule, metadata, priority, email, and ai_flags may be edited. The event identity (ext_job_id, media_assets) is immutable. email is mandatory on every update; at least one of schedule, metadata, priority, or ai_flags must also be supplied. Delivered to the clipping worker as a full-replacement task (action = update). Processing is asynchronous; the API returns HTTP 202 Accepted with a job_id that can be polled via /v2/status.
       security:
         - ApiKeyAuth: []
       parameters:
@@ -463,16 +477,22 @@ paths:
               required:
                 - email
               description: |
-                Editable fields for an existing event. `email` is required on every update; at least one of `schedule`, `priority`, or `ai_flags` must also be supplied.
+                Editable fields for an existing event. `email` is required on every update; at least one of `schedule`, `metadata`, `priority`, or `ai_flags` must also be supplied.
 
                 Any field omitted from the request is left unchanged. `schedule`, when provided, fully replaces the existing schedule.
               anyOf:
                 - required: [schedule]
+                - required: [metadata]
                 - required: [priority]
                 - required: [ai_flags]
               properties:
                 schedule:
                   $ref: '#/components/schemas/EventSchedule'
+                metadata:
+                  type: array
+                  description: Replacement metadata mapping (full replacement of the stored entries), mapped by ext_asset_id.
+                  items:
+                    $ref: '#/components/schemas/MetadataEntry'
                 priority:
                   type: integer
                   minimum: 0
@@ -510,9 +530,11 @@ paths:
                       date_time: "2026-06-22T19:00:00Z"
                     end:
                       date_time: "2026-06-22T21:00:00Z"
-                    metadata:
-                      - language: en-US
-                        title: Live Sports Event (Rescheduled)
+                  metadata:
+                    - ext_asset_id: live-event-001
+                      language: en-US
+                      title: Live Sports Event (Rescheduled)
+                      category: news
               update_priority:
                 summary: Adjust priority only
                 value:
@@ -565,7 +587,7 @@ paths:
           description: No event exists for the supplied ext_job_id.
   /v3/smart-crop:
     post:
-      summary: Generate Video from a sequence of media assets and export to destination based on a predefined export template. Media assets in the sequence must be registered — either previously via /v3/upload, or inline in this request via the optional media_assets field.
+      summary: Generate Video from a sequence of media assets and export to destination based on a predefined export template. Media assets in the sequence must be registered — either previously via /v3/upload, or inline in this request via the optional media_assets field. The request materializes as a video-editor project (project_id / ext_project_id); each inline media_assets entry not already registered spawns one linked vod capture job whose ext_job_id equals the asset's ext_asset_id (already-registered assets spawn no capture job — idempotent). Every request attribute is passed through verbatim into the capture task (data.job), including email and priority.
       security:
         - ApiKeyAuth: []
       requestBody:
@@ -598,13 +620,62 @@ paths:
                     properties:
                       ext_id:
                         type: string
-                        description: Identifier for the Media Asset in the external MAM / DAM system. This must be a master group ext_id (not a proxy) previously registered via /v3/upload.
+                        description: Identifier for the Media Asset in the external MAM / DAM system. This must be a master group ext_id (not a proxy) previously registered via /v3/upload or registered inline in this request.
                       start_timecode:
                         type: string
                         description: Start timecode for the clip
                       end_timecode:
                         type: string
                         description: End timecode for the clip
+                project_metadata:
+                  type: array
+                  description: Localized descriptive metadata for the project (the rendered sequence output) — not tied to any individual asset. Same entry spec as metadata minus ext_asset_id, plus optional tags. Applied to the video-editor project.
+                  items:
+                    $ref: '#/components/schemas/ProjectMetadataEntry'
+                metadata:
+                  type: array
+                  description: Localized descriptive metadata for inline assets, mapped to assets via ext_asset_id (shared MetadataEntry schema).
+                  items:
+                    $ref: '#/components/schemas/MetadataEntry'
+                media_ai_flags:
+                  type: array
+                  description: Per-asset ingest-time AI flags, mapped via ext_asset_id. Distinct from the job-level ai_flags, which applies to the rendered sequence output.
+                  items:
+                    type: object
+                    required:
+                      - ext_asset_id
+                      - ai_flags
+                    properties:
+                      ext_asset_id:
+                        type: string
+                        description: The inline media asset these flags apply to.
+                      ai_flags:
+                        type: array
+                        minItems: 1
+                        maxItems: 5
+                        uniqueItems: true
+                        items:
+                          type: string
+                          enum:
+                            - GENERATE_METADATA
+                            - DETECT_SCENES
+                            - REFRAME_9_16
+                            - REFRAME_1_1
+                            - REFRAME_3_4
+                ai_flags:
+                  type: array
+                  description: Job-level flags applied to the rendered sequence output (e.g. REFRAME_9_16). Distinct from media_ai_flags, which governs per-asset ingest processing.
+                  minItems: 1
+                  maxItems: 5
+                  uniqueItems: true
+                  items:
+                    type: string
+                    enum:
+                      - GENERATE_METADATA
+                      - DETECT_SCENES
+                      - REFRAME_9_16
+                      - REFRAME_1_1
+                      - REFRAME_3_4
                 export_template_name:
                   type: array
                   items:
@@ -629,6 +700,10 @@ paths:
                     - ext_id: asset-group-001
                       start_timecode: "00:00:10:00"
                       end_timecode: "00:00:25:00"
+                  project_metadata:
+                    - language: en-US
+                      title: Sports Show (Recorded)
+                      tags: ["#ctv", "#primetime", "#news", "#sports"]
                   export_template_name:
                     - HD-1080p-Stereo
                   priority: 500
@@ -636,38 +711,93 @@ paths:
               inline_registration:
                 summary: Inline asset registration + smart-crop in a single call
                 value:
-                  ext_job_id: ext-job-002
+                  ext_job_id: vod-capture-001
                   media_assets:
                     - ext_asset_id: master-video-005
-                      uri: http://<HLS URL>
+                      uri: https://example.com/vod/005/master.m3u8
+                      duration: 95.0
+                      size: 5368709120
+                    - ext_asset_id: master-video-006
+                      uri: https://example.com/vod/006/master.m3u8
                       duration: 120.5
                       size: 7516192768
+                  metadata:
+                    - ext_asset_id: master-video-005
+                      language: en-US
+                      title: Sports Show (Recorded)
+                      category: news
+                      sub-category: none
+                    - ext_asset_id: master-video-006
+                      language: en-US
+                      title: 7/11 Documentary
+                      category: news
+                      sub-category: documentary
+                  media_ai_flags:
+                    - ext_asset_id: master-video-005
+                      ai_flags:
+                        - DETECT_SCENES
+                    - ext_asset_id: master-video-006
+                      ai_flags:
+                        - DETECT_SCENES
+                        - GENERATE_METADATA
                   sequence:
-                    - ext_id: asset-group-005
+                    - ext_id: master-video-005
                       start_timecode: "00:00:05:00"
                       end_timecode: "00:00:20:00"
+                    - ext_id: master-video-006
+                  project_metadata:
+                    - language: en-US
+                      title: Sports Show (Recorded)
+                      tags: ["#ctv", "#primetime", "#news", "#sports"]
+                  ai_flags:
+                    - REFRAME_9_16
                   export_template_name:
                     - HD-1080p-Stereo
                   priority: 500
                   email: producer@example.com
       responses:
         '202':
-          description: Job accepted successfully
+          description: Job accepted. There is no top-level capture job_id — the request materializes as a video-editor project plus zero or more linked capture jobs (one per inline asset requiring ingestion). Each capture job's ext_job_id equals its asset's ext_asset_id. Poll /v2/status with the capture job_ids (or their ext_job_ids) to track ingestion progress.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  job_id:
+                  project_id:
                     type: string
-                    description: Unique identifier for the created job
-                    example: 1015825c-7c90-4042-8513-24585fb9c235
+                    description: Video-editor project ID materialized by this smart-crop request.
+                    example: c4f0a9d2-8e17-4b6a-b3d5-92e61f7c0a44
+                  ext_project_id:
+                    type: string
+                    description: Same value as the request's ext_job_id.
+                    example: vod-capture-001
+                  status:
+                    type: string
+                    enum:
+                      - Queued
+                    example: Queued
+                  capture_jobs:
+                    type: array
+                    description: Linked vod capture jobs spawned for inline assets requiring ingestion. Empty when every referenced asset is already registered.
+                    items:
+                      type: object
+                      properties:
+                        job_id:
+                          type: string
+                          description: AI Studio job ID of the capture job.
+                          example: 7c2a91d4-55e0-4b8f-9a3c-d81f0e6b2a17
+                        ext_job_id:
+                          type: string
+                          description: External job ID of the capture job — equals the asset's ext_asset_id.
+                          example: master-video-006
         '400':
           description: Invalid or Expired API Key
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BadRequestResponse'
+        '409':
+          description: An inline ext_asset_id is already registered with a different uri.
         '401':
           description: Missing API Key
           content:
@@ -767,7 +897,7 @@ paths:
           description: Smart-crop job with the given ext_job_id was not found
   /v3/job/{ext_job_id}:
     delete:
-      summary: Delete an existing job. Works for jobs created via either POST /v3/event (event registration) or POST /v3/smart-crop (smart-crop job). Removes the job and cancels any pending processing associated with the given ext_job_id. Any downstream artifacts already produced (e.g. published renders) are unaffected. email is mandatory (identifies the requesting user for audit purposes).
+      summary: Delete an existing job created via POST /v3/event. Removes the job and cancels all pending scheduled clipping jobs associated with the given ext_job_id. Any downstream artifacts already produced (e.g. published renders) are unaffected. VOD capture jobs (spawned by /v3/smart-crop) cannot be deleted — once spawned they run to completion; such an ext_job_id is rejected with 400. email is mandatory (identifies the requesting user for audit purposes).
       security:
         - ApiKeyAuth: []
       parameters:
@@ -776,7 +906,7 @@ paths:
           required: true
           schema:
             type: string
-          description: External job identifier previously supplied on POST /v3/event or POST /v3/smart-crop.
+          description: External job identifier previously supplied on POST /v3/event.
       requestBody:
         required: true
         content:
@@ -795,15 +925,11 @@ paths:
                 summary: Delete a job created via /v3/event
                 value:
                   email: producer@example.com
-              delete_smart_crop_job:
-                summary: Delete a job created via /v3/smart-crop
-                value:
-                  email: producer@example.com
       responses:
         '204':
           description: Job deleted successfully. No response body.
         '400':
-          description: Invalid or Expired API Key
+          description: Invalid or Expired API Key, or the ext_job_id resolves to a vod capture job (not deletable)
           content:
             application/json:
               schema:
@@ -1134,6 +1260,68 @@ components:
           description: One or more proxy media assets that make up this group.
           items:
             $ref: '#/components/schemas/ProxyMediaAssetV3Item'
+    MetadataEntry:
+      type: object
+      required:
+        - ext_asset_id
+        - language
+      properties:
+        ext_asset_id:
+          type: string
+          description: The media asset this entry describes (maps the entry to a media_assets item).
+        language:
+          type: string
+          description: Language code.
+          example: en-US
+        title:
+          type: string
+          description: Asset title.
+        description:
+          type: string
+          description: Asset description.
+        category:
+          type: string
+          description: Content category.
+          example: news
+        sub-category:
+          type: string
+          description: Content sub-category.
+          example: documentary
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for the asset.
+          example: ["#live", "#sports"]
+    ProjectMetadataEntry:
+      type: object
+      required:
+        - language
+      description: Same spec as MetadataEntry, project-scoped — no ext_asset_id; adds tags.
+      properties:
+        language:
+          type: string
+          description: Language code.
+          example: en-US
+        title:
+          type: string
+          description: Project title.
+        description:
+          type: string
+          description: Project description.
+        category:
+          type: string
+          description: Content category.
+          example: news
+        sub-category:
+          type: string
+          description: Content sub-category.
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags for the rendered output.
+          example: ["#ctv", "#primetime", "#news", "#sports"]
     EventMediaAsset:
       type: object
       required:
@@ -1142,7 +1330,7 @@ components:
       properties:
         ext_asset_id:
           type: string
-          description: Identifier for the event media asset within this event.
+          description: Identifier for the event media asset. Unique per asset in the external system — re-registering the same ext_asset_id with a different uri is rejected with 409 Conflict.
         uri:
           type: string
           description: |
@@ -1177,7 +1365,8 @@ components:
           $ref: '#/components/schemas/EventDateTime'
         metadata:
           type: array
-          description: Localized metadata for this schedule.
+          deprecated: true
+          description: DEPRECATED (v6.3.4) — use the request-level `metadata` field (MetadataEntry[], mapped by ext_asset_id) instead. Accepted for one deprecation window only.
           items:
             type: object
             properties:
